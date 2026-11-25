@@ -1,0 +1,113 @@
+# personal-agent sample. Derived from ZeroClaw's config schema.
+# Copy aside and edit. Do not put real secrets in the repository copy.
+schema_version = 4
+
+[providers.models.ollama.local]
+model = "llama3.2"
+uri = "http://127.0.0.1:11434"
+
+[agents.default]
+enabled = true
+model_provider = "ollama.local"
+risk_profile = "personal"
+# Bind channels here once they are enabled, for example:
+# channels = ["webhook.inbox", "filesystem.inbox", "email.home"]
+
+[agents.default.memory]
+backend = "markdown"
+
+[agents.default.workspace]
+# Absolute path to the workspace/ directory next to this file.
+path = "/absolute/path/to/personal-agent-workspace/workspace"
+
+[risk_profiles.personal]
+level = "supervised"
+
+[memory]
+backend = "markdown"
+auto_save = true
+
+# Kept for the editor bridge (zeroclaw-acp-bridge -> gateway /acp).
+[gateway]
+host = "127.0.0.1"
+port = 42617
+require_pairing = true
+
+# Webhook channel: its own listener. Requires a secret before it will start.
+# [channels.webhook.inbox]
+# enabled = true
+# port = 8787
+# listen_path = "/webhook"
+# secret = "replace-with-a-real-secret"
+# send_url = "https://example.invalid/outbox"
+
+# Filesystem inbox. Paths must exist and must not be a broad root (/, /tmp, ...).
+# [channels.filesystem.inbox]
+# enabled = true
+# paths = ["/absolute/path/to/personal-agent-workspace/workspace/inbox"]
+# include = ["*.json"]
+# events = ["created", "modified"]
+# read_content = true
+
+# [channels.email.home]
+# enabled = true
+# imap_host = "imap.example.com"
+# username = "you@example.com"
+# password = "replace-me"
+# smtp_host = "smtp.example.com"
+# from_address = "you@example.com"
+
+# Repeating schedule. Timer fires into an agent turn; it does not call the
+# model on its own. delivery.mode = "none" keeps the run quiet.
+[cron.daily_brief]
+job_type = "agent"
+name = "Daily brief"
+enabled = false
+uses_memory = true
+session_target = "isolated"
+prompt = """
+Read AGENTS.md, MEMORY.md, memory/index.md, and memory/reported.md.
+If there is something new the user needs, write a short note under outbox/.
+If nothing new happened, do not send a message and do not repeat reported.md.
+"""
+
+[cron.daily_brief.schedule]
+kind = "cron"
+expr = "0 8 * * *"
+tz = "Asia/Shanghai"
+
+[cron.daily_brief.delivery]
+mode = "none"
+
+# One-shot follow-up. Create the next one from the run; do not reuse a fired id.
+# [cron.watch_delivery]
+# job_type = "agent"
+# name = "Check a delivery"
+# enabled = true
+# uses_memory = true
+# prompt = "Read memory/progress/watch-delivery.md and update it. Stay quiet if nothing changed."
+# [cron.watch_delivery.schedule]
+# kind = "at"
+# at = "2026-11-26T09:00:00+08:00"
+# [cron.watch_delivery.delivery]
+# mode = "none"
+
+[cron.weekly_dreaming]
+job_type = "agent"
+name = "Weekly memory review"
+enabled = false
+uses_memory = true
+session_target = "isolated"
+prompt = """
+Review memory/notes/, memory/index.md, MEMORY.md, and recent memory/YYYY-MM-DD.md logs.
+Write stable habits into memory/notes/ and update memory/index.md.
+Do not rewrite memory/reported.md. Do not send a message unless two notes conflict and a person has to choose.
+"""
+
+[cron.weekly_dreaming.schedule]
+kind = "cron"
+expr = "0 21 * * 0"
+tz = "Asia/Shanghai"
+
+[cron.weekly_dreaming.delivery]
+mode = "none"

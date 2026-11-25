@@ -1,0 +1,408 @@
+# Cargo Audit / Deny Policy
+
+This document explains the relationship between `.cargo/audit.toml` and
+`deny.toml`, the rationale for every ignored advisory, and the workflow
+for adding or removing entries. It is the maintainer-facing companion
+to the in-file comments.
+
+**Audience:** maintainers triaging `cargo audit` and `cargo deny` CI failures,
+or contributors opening a PR that bumps a dependency and needs to drop a
+no-longer-needed ignore.
+
+---
+
+## Two tools, two lockfiles
+
+`cargo audit` and `cargo deny check advisories` look at the same
+`Cargo.lock` but differ in scope:
+
+- **`cargo audit` (`.cargo/audit.toml`)** reads the entire lockfile and
+  reports every RustSec advisory touching any package, including
+  transitive dependencies outside the workspace's dep tree.
+- **`cargo deny` (`deny.toml`)** is graph-aware: it walks the actual
+  resolved dep graph and only reports advisories for crates actually
+  pulled in by the workspace.
+
+The result is that `cargo audit` can report advisories
+`cargo deny` considers non-applicable, even when both files are
+configured against the same `Cargo.lock`. The drift between the two
+tools is tracked in **#8519**.
+
+The Security job in `.github/workflows/ci.yml` runs **both** `cargo
+audit` and `cargo deny check advisories`. A non-zero exit from either
+tool blocks the PR. What actually fails each tool differs by category:
+
+- **`cargo audit`** (bare, no `--deny warnings`): vulnerability
+  advisories are errors (exit 1); informational and unmaintained
+  advisories are reported as allowed warnings and exit 0.
+- **`cargo deny check advisories`**: vulnerability *and* unmaintained advisories for crates in the resolved graph are errors (exit 1). That is why the live unmaintained exceptions for `rustls-pemfile`, `anymap2`, `pin-utils`, `chrono` and `chrono-tz` remain in `deny.toml`. A stale graph-ignore instead emits `advisory-not-detected`, which is a warning (exit 0); it is never triggered by removing an entry from `.cargo/audit.toml`.
+
+An audit-only ignore is needed by `cargo audit` but not by `cargo deny`
+under its configured graph. That describes tool scope, not advisory
+severity. Removing an ignore for an affected vulnerability makes the
+configured `cargo audit` fail (exit 1). An unmaintained or informational
+finding is instead an allowed warning under the bare invocation.
+
+The tools' graph scopes also do not prove runtime reachability. A crate
+outside the default graph can be included by another feature or target.
+Each vulnerability exception needs an explicit exposure rationale,
+tracking, and removal condition; a clean default-graph scan is not
+sufficient justification by itself.
+
+---
+
+## Ignore categories
+
+There are two kinds of ignored advisory:
+
+### 1. Real CVE / vulnerability (must be remediated)
+
+These ignores mark advisories with an exploitable bug. They are
+**temporary** and must be removed when a fix lands.
+
+Live, deny+audit (both files):
+
+- **`libsqlite3-sys` (`RUSTSEC-2026-0459`, CVE-2026-119375)**: the bundled
+  SQLite 3.53.2 can return uninitialized page-cache memory when a process
+  opens a database file together with a crafted sibling `-wal` file. The
+  vector is local and needs both files. ZeroClaw opens its own databases
+  under its data directory, plus the macOS Messages database read-only for
+  the iMessage channel.
+  - **The fix is unreachable from here.** It's `libsqlite3-sys` 0.39 (SQLite
+    3.54), which needs `rusqlite` 0.41. `matrix-sdk-sqlite` 0.19.1, the newest
+    release, requires `rusqlite` 0.40.2, and `libsqlite3-sys` is a `links`
+    crate, so `Cargo.lock` can hold only one version of it.
+  - **When to remove it:** take the entry out of both files in the
+    `rusqlite` 0.41 bump, once `matrix-sdk-sqlite` accepts it. Tracking
+    #12320.
+
+Live, audit-only (`.cargo/audit.toml` only):
+
+- **`cookie` 0.16.2 (`RUSTSEC-2026-0594`)**: private cookies can reuse
+  nonces in a process that forks. The fix is `cookie` 0.18.3.
+  - **Exposure:** none of our builds compiles the affected code. Private
+    and signed cookies live in `cookie`'s `secure` module, which compiles
+    only with its `private` or `signed` feature, and neither is enabled
+    anywhere in the workspace. The 0.18 copy that `fantoccini` and the
+    desktop app's `tauri` and `wry` use is on the fixed 0.18.3.
+  - **The fix is unreachable for this copy.** `cookie` 0.16.2 comes in only
+    through `webdriver`, which `fantoccini` pulls in behind the optional
+    `browser-native` feature. `webdriver` 0.54.0, the newest release, still
+    requires `cookie` `^0.16`, and no 0.16.x release has the fix.
+  - **Why only `audit.toml`:** `cargo deny`'s configured graph doesn't
+    include `browser-native`, so only `cargo audit` reports it.
+  - **When to remove it:** once a `webdriver` (or `fantoccini`) release
+    accepts `cookie` 0.18.3 or later, update it so `cookie` 0.16 leaves
+    `Cargo.lock`, and remove the entry in the same change. Tracking #12693.
+
+The previous entry in this category, `RUSTSEC-2026-0292`
+(`imbl-sized-chunks` double free), was waived in PR #11038 on 2026-09-21
+and cleared four days later by the `matrix-sdk` 0.19 bump, which resolves
+`imbl` 7.0.2 and with it the patched `imbl-sized-chunks` 0.2; the waiver
+came out of both tool files in the same change.
+
+The entry before that, the wasmtime-wasi CVE bundle tracked
+in **#8519** (`RUSTSEC-2026-0149`, `-0182`, `-0188`, then `-0222`), was
+cleared by the `45.0.3` bump in PR #8542 and the subsequent `47.0.3`
+bump in PR #9589, which also removed the temporary waivers from both
+files.
+
+**Process for this category:**
+
+- Add the entry with a single-line `reason` ending in the tracking
+  issue URL or PR number.
+- When a fix lands, remove the entry from **both** `.cargo/audit.toml`
+  *and* `deny.toml` in the same PR. Leaving a stale ignore behind makes
+  `cargo deny` emit `advisory-not-detected` (a warning, not a gate
+  failure) for the entry, so keep the two files in sync.
+- Each file has a one-line `── tracking #... ──` header above its
+  block. Preserve the header when adding entries to the same category;
+  introduce a new header for a new category.
+
+### 2. Unmaintained-crate advisory (no fix available)
+
+These advisories are informational. The crate has no maintained
+successor on the dependency lines we use. They are
+**semi-permanent**; the entry stays until the underlying dependency
+is replaced (e.g. GTK3 → GTK4).
+
+Live, deny+audit (both files):
+
+- **`rustls-pemfile` (`RUSTSEC-2025-0134`)**: unmaintained;
+  transitive dep awaiting upstream migration to `rustls-pki-types`.
+  Present in both `deny.toml` and `audit.toml`.
+
+`bitmaps` (`RUSTSEC-2026-0247`) and `proc-macro-error2`
+(`RUSTSEC-2026-0173`) were both live here until the `matrix-sdk` 0.19
+bump; see the change log entry below. Neither crate is in `Cargo.lock`
+any more, so the visible `bitmaps` unsoundness warning
+(`RUSTSEC-2025-0167`) is gone with them.
+
+Live, deny-only:
+
+- **`anymap2` (`RUSTSEC-2026-0319`)**: unmaintained; `matrix-sdk 0.19.1` still depends on it, with no replacement SDK release available. The advisory recommends `anymap3`. Only `deny.toml` needs an exception because the configured `cargo audit` invocation treats this maintenance advisory as an allowed warning. Remove the exception once the resolved dependency graph no longer includes an affected `anymap2`. Tracking #11429.
+- **`pin-utils` (`RUSTSEC-2026-0441`)**: unmaintained; its only path is `async-imap` 0.11.3, used by `zeroclaw-channels` and `zeroclaw-tools`, and the latest release, `async-imap` 0.12.0, still depends on it, so no upgrade removes it today. Only `deny.toml` needs an exception because the configured `cargo audit` invocation treats this maintenance advisory as an allowed warning. Remove the exception once the resolved dependency graph no longer includes `pin-utils`, through an `async-imap` release without it or a move off `async-imap`. Tracking #12252.
+- **`chrono` (`RUSTSEC-2026-0543`)**: unmaintained; all versions are affected and the advisory lists no patched release, so no version satisfies `cargo deny`. `chrono` 0.4.45 is a direct dependency of 11 workspace crates and also comes in through `async-imap` 0.11.3, `cron` 0.15.0, `oauth2` 5.0.0 and `chrono-tz`. The advisory recommends `jiff` or `time`. Only `deny.toml` needs an exception because the configured `cargo audit` invocation treats this maintenance advisory as an allowed warning. This is a temporary waiver, not a fix: remove it when the replacement lands. Where a third-party crate still brings `chrono` in after the workspace moves off it, the exception stays until that path is gone too. Tracking #12505.
+- **`chrono-tz` (`RUSTSEC-2026-0555`)**: unmaintained; all versions are affected and the advisory lists no patched release. `chrono-tz` 0.10.4 is used only by `zeroclaw-runtime`. Only `deny.toml` needs an exception, for the same reason as `chrono`. Remove it with the `chrono` exception, when the replacement lands. Tracking #12505.
+
+### Audit-only inventory (scope, not severity)
+
+Tool scope does not determine advisory severity. This inventory includes
+informational unsoundness and maintenance notices.
+
+Live, audit-only (`cargo deny`'s resolved graph no longer pulls these
+in, but they remain in `Cargo.lock` and `cargo audit` reads the whole
+lockfile — remove from `audit.toml` only once the crate is either
+dropped from `Cargo.lock` entirely, e.g. via `cargo update` or a
+dependency bump, or every locked version of it is patched/unaffected
+per the advisory):
+
+- **`lru` (`RUSTSEC-2026-0253`)**: informational unsoundness in the
+  retained 0.16 Nostr cache dependency, outside the current default
+  cargo-deny graph. Track the dependency migration in #9602; remove
+  the ignore when the affected retained copy is repaired or removed.
+- **GTK3 stack (11 entries, `RUSTSEC-2024-0411..-0420`, `-0429`)**:
+  `gdk`/`gtk`/`atk`-family gtk-rs bindings and `glib`. Present in
+  `Cargo.lock` — `zeroclaw-desktop` (Tauri) was removed in PR #8544
+  and reintroduced in PR #8565 — but not needed by `cargo deny`'s
+  current default-target resolved graph (`cargo deny check bans` and
+  `check advisories` both pass clean without these ignores). Do not
+  assume this means the crates are gone from the tree; re-check with
+  `grep '^name = "<crate>"$' Cargo.lock` before removing from
+  `audit.toml`. Tracking #8519.
+- **`unic-*` (5 entries, `RUSTSEC-2025-0075`, `-0080`, `-0081`,
+  `-0098`, `-0100`)**: Unicode data tables, previously transitive via
+  `pulldown-cmark` and `mime_guess`. Same drift as above; tracking
+  #8519.
+- **macro / font helpers (1 entry, `RUSTSEC-2024-0388`)**:
+  `derivative`. Same drift; tracking #8519.
+- **`bincode` (`RUSTSEC-2025-0141`)**: previously transitive via
+  `probe-rs builtin-targets`. Same drift; tracking #8519.
+- **`instant` (`RUSTSEC-2024-0384`)**: informational-only unmaintained
+  advisory. Same drift; tracking #8519.
+
+Resolved (safe to drop from both files — either the crate is gone
+from `Cargo.lock` entirely, or every locked version is patched /
+unaffected by the advisory):
+
+- **`rand` (`RUSTSEC-2026-0097`)**: re-entrancy unsoundness in a
+  custom global logger. `Cargo.lock` still resolves `rand` 0.8.6,
+  0.9.4, and 0.10.1 — the crate is not absent — but the
+  [advisory](https://rustsec.org/advisories/RUSTSEC-2026-0097.html)
+  marks all three of those versions as patched, so no locked copy is
+  affected and the ignore is no longer needed.
+
+**Process for this category:**
+
+- Use a short reason naming the crate role, e.g.
+  `gtk-rs GTK3 bindings; transitive via zeroclaw-desktop/tauri`.
+- Do not add `; tracking #...` for entries that are stable
+  unmaintained warnings and unlikely to be resolved in the next
+  release cycle.
+- An entry drops out of `deny.toml` as soon as `cargo deny`'s resolved
+  graph no longer needs it — that is a graph fact, not a lockfile fact,
+  and it can change on the next dependency bump or feature change
+  without the crate leaving `Cargo.lock`. It only drops out of
+  `audit.toml` once the crate is either gone from `Cargo.lock`
+  entirely or every locked version of it is patched/unaffected per the
+  advisory. Removing an audit-only entry while a still-affected
+  version remains locked reports the finding again: vulnerability
+  advisories fail the audit, while maintenance/informational findings
+  remain allowed warnings under the configured bare invocation. Always
+  check `Cargo.lock` and the advisory's patched-version range directly,
+  not just `cargo deny`'s last result.
+
+---
+
+## Tracking issues
+
+- **#8519**: *Reconcile cargo-audit ignores and remediate wasmtime-wasi
+  CVEs.* Master issue for the audit/deny drift. The wasmtime-wasi CVE
+  bundle is fully remediated (PR #8542, then PR #9589) and no longer
+  needs an ignore in either file. The GTK3 stack, unic-*, macro/font
+  helpers, `bincode`, and `instant` are no longer needed in
+  `deny.toml` (removed from the resolved dependency graph) but remain
+  audit-only ignores in `.cargo/audit.toml` until they're gone from
+  `Cargo.lock`. `rand` is removed from both files because every
+  locked version (0.8.6, 0.9.4, 0.10.1) is patched per the advisory,
+  not because the crate left `Cargo.lock`. Remaining deny+audit live
+  ignores: `rustls-pemfile`, and the `libsqlite3-sys` waiver tracked in
+  #12320. Remaining audit-only ignores:
+  `lru` (1, tracked in #9602), the `cookie` 0.16.2 waiver (1, tracked in
+  #12693), plus the 19 lockfile-stale entries above.
+- **#9899**: *Remove the `matrix-sdk -> imbl` advisory waivers.* Closed by
+  the `matrix-sdk` 0.19 bump. The resolved graph and `Cargo.lock` no longer
+  contain `bitmaps` or an affected `imbl-sized-chunks`, so
+  `RUSTSEC-2026-0247`, `RUSTSEC-2026-0292`, and the separate visible
+  `RUSTSEC-2025-0167` warning are all gone, and the waiver text is out of
+  both tool files and this document.
+- **#11429**: *Remove the `anymap2` maintenance exception after Matrix migrates.* The RUSTSEC-2026-0319 exception is present only in `deny.toml`. Keep this issue open until the Matrix dependency update removes the affected crate from the resolved graph, then remove the exception and update this inventory.
+- **#12252**: *Accept the `pin-utils` maintenance advisory (RUSTSEC-2026-0441) until `async-imap` moves off it.* The RUSTSEC-2026-0441 exception is present only in `deny.toml`. Keep this issue open until the email dependency update removes `pin-utils` from the resolved graph, then remove the exception and update this inventory.
+- **#12320**: *Security job fails on every build: RUSTSEC-2026-0459.* Owns
+  the `libsqlite3-sys` waiver in both files. It stays open until the
+  workspace moves to `rusqlite` 0.41 and `libsqlite3-sys` 0.39.1 or later,
+  which needs a `matrix-sdk-sqlite` release that accepts `rusqlite` 0.41.
+  That change removes the waiver from both files.
+- **#12505**: *Track replacement of unmaintained chrono and chrono-tz dependencies.* Owns the `chrono` (RUSTSEC-2026-0543) and `chrono-tz` (RUSTSEC-2026-0555) exceptions, both present only in `deny.toml`. It stays open until the workspace and its dependencies no longer pull either crate into the resolved graph; that change removes both exceptions and updates this inventory.
+- **#12693**: *Security job fails on every build: RUSTSEC-2026-0594.* Owns the `cookie` 0.16.2 waiver, present only in `.cargo/audit.toml`. It stays open until a `webdriver` or `fantoccini` release lets `cookie` 0.16 leave `Cargo.lock`; that change removes the waiver and updates this inventory.
+- **#8059**: *Policy cleanup: deny.toml ignored-advisory tracking,
+  multiple-versions, wildcards.* piiiico's RFC on adding per-entry
+  rationale to `deny.toml` ignore blocks. This doc is the
+  higher-level policy view; the in-file comments are the per-entry
+  tracking.
+
+---
+
+## Local validation
+
+Run before pushing any PR that touches `.cargo/audit.toml` or
+`deny.toml`:
+
+```bash
+cargo install cargo-audit --locked    # one-time
+cargo audit                          # binds the CI gate
+cargo deny check advisories          # graph-aware cross-check
+cargo fmt --all -- --check
+```
+
+If `cargo audit` reports an error-class advisory that is not on the ignore
+list, either add a temporary ignore with rationale and tracking or fix the
+underlying dependency. An informational advisory may remain an unignored
+warning only when its acceptance, owner, and revisit/removal condition are
+documented. No advisory is currently accepted under that rule;
+`RUSTSEC-2025-0167` was, until `bitmaps` left `Cargo.lock`.
+
+If `cargo deny` reports an advisory that `cargo audit` does not, the
+two tools have drifted again. Open or update the tracking issue.
+
+---
+
+## Change log
+
+- 2026-11-23: Updated `cookie` 0.18.1 to 0.18.3 and added `RUSTSEC-2026-0594`
+  (`cookie` 0.16.2) to `.cargo/audit.toml` only, with its category 1 entry
+  above.
+  - **Why a waiver:** the advisory reached the database on 2026-11-23 and
+    failed `cargo audit` in the `Security` job on every build. The 0.18 copy
+    moves to the fix, but `webdriver` 0.54.0 still requires `cookie` `^0.16`.
+  - **Why only `audit.toml`:** `cargo deny check` passes, because its
+    configured graph doesn't include the optional `browser-native` feature.
+- 2026-11-17: Added `RUSTSEC-2026-0543` (`chrono`) and `RUSTSEC-2026-0555`
+  (`chrono-tz`) to `deny.toml` only, with their deny-only entries above.
+  - **Why a waiver:** both advisories were assigned their IDs in the
+    advisory database on 2026-11-17 and from then failed `cargo deny check`
+    in the `Security` job on every build. Neither
+    lists a patched release, and replacing the crates is a migration of its
+    own, tracked in #12505.
+  - **Why only `deny.toml`:** bare `cargo audit` reports both as allowed
+    warnings (exit 0), as it does for `anymap2` and `pin-utils`.
+- 2026-11-09: Added `RUSTSEC-2026-0459` (`libsqlite3-sys` 0.38.2, bundled
+  SQLite 3.53.2, CVE-2026-119375) to both files, with its category 1 entry
+  above.
+  - **Why a waiver:** the advisory reached the database on 2026-11-09 and
+    failed the `Security` job on every build. The patched `libsqlite3-sys`
+    0.39 needs `rusqlite` 0.41, which `matrix-sdk-sqlite` 0.19.1 doesn't
+    accept yet, so `cargo update` can't take it.
+  - **Tracking:** both reasons point at #12320.
+  - **`deny.toml`:** its `ignore` comment now names both kinds of entry it
+    holds, as PR #11038 had it.
+- 2026-10-21: Refreshed container CA stores and added compromised-issuer
+  regressions. After #11924 removed the legacy MQTT verifier and its
+  four ignores, removed its stale inventory here. Distinguished audit
+  tool scope from advisory severity.
+- 2026-09-23: Bumped `matrix-sdk` 0.18 to 0.19 (with `rusqlite` 0.37 to
+  0.40 and the OpenTelemetry stack 0.32 to 0.33, both forced by that bump)
+  and removed every waiver it clears: `RUSTSEC-2026-0247` (`bitmaps`),
+  `RUSTSEC-2026-0292` (`imbl-sized-chunks`), and `RUSTSEC-2026-0173`
+  (`proc-macro-error2`) came out of `deny.toml` and `.cargo/audit.toml`,
+  and the `RUSTSEC-2025-0167` acceptance note came out of this document.
+  `matrix-sdk` 0.19 pulls `imbl` 7.0.2, which drops `bitmaps` and requires
+  the patched `imbl-sized-chunks` 0.2, and its dev-dependency graph no
+  longer reaches `proc-macro-error2`. All three crates are absent from
+  `Cargo.lock`, which is the removal condition both tools use. This retires
+  the waiver added in PR #11038 four days earlier. Closes #9899.
+- 2026-09-21: Added `RUSTSEC-2026-0292` (`imbl-sized-chunks` double
+  free) to both files, the first live real-CVE waiver since the wasmtime
+  bundle cleared, with its category 1 entry above. Both reasons point at
+  #9899, now widened to own both `matrix-sdk -> imbl` waivers, rather
+  than at matrix-org/matrix-rust-sdk#6859, which closed 2026-09-14.
+  (PR #11038)
+- 2026-08-11: Mirrored the exact `RUSTSEC-2026-0247` `bitmaps` waiver
+  from `deny.toml` into `.cargo/audit.toml` and added its dependency
+  routes, #9899 lifecycle, and tool-specific removal conditions to this
+  inventory. Documented that `RUSTSEC-2025-0167` is a separate allowed
+  warning, not covered by the unmaintained-advisory waiver.
+- 2026-08-04: Rebased onto `upstream/master`, which merged PR #9589
+  (wasmtime `45.0.3` → `47.0.3`, clearing `RUSTSEC-2026-0222` and
+  removing the waiver from both files). Removed the now-stale
+  wasmtime references from the "Real CVE" category, the "Live,
+  audit-only" list, and the #8519 tracking summary above — there is
+  currently no live entry in the real-CVE category.
+- 2026-08-03: Corrected the in-file block classification in
+  `.cargo/audit.toml` to match the actual file contents: `wasmtime`
+  (`RUSTSEC-2026-0222`) is back in the audit-only block (it was
+  removed from `deny.toml`, so "Live in both" was wrong), and
+  `proc-macro-error2` (`RUSTSEC-2026-0173`) moved to the "Live in
+  both" block (it is present in `deny.toml`). Also corrected the
+  enforcement claims per tool: under the configured invocations,
+  informational/unmaintained advisories are allowed warnings in
+  `cargo audit` (exit 0) but unmaintained advisories for crates in
+  `cargo deny`'s resolved graph are errors (exit 1) — hence the two
+  live unmaintained denies — while `advisory-not-detected` is `cargo
+  deny`'s stale graph-ignore warning (exit 0). `rand`
+  (`RUSTSEC-2026-0097`) was the only entry removed from
+  `.cargo/audit.toml` in this PR; everything else that left `deny.toml`
+  remains an audit-only ignore here.
+- 2026-07-31: Corrected the 07-19 pass for `proc-macro-error2`
+  (`RUSTSEC-2026-0173`): it is still in `cargo deny`'s resolved graph
+  via `matrix-sdk` dev-deps (`aquamarine`) in `zeroclaw-channels`, so it
+  is a live deny+audit ignore, not audit-only drift — removed from
+  `deny.toml` in the 07-06/07-19 passes, it re-fails `cargo deny check`.
+  Restored it in `deny.toml`. Also moved `wasmtime` (`RUSTSEC-2026-0222`)
+  to audit-only: it sits behind the optional `plugins-wasmtime` feature,
+  so `cargo deny` no longer matches it (`advisory-not-detected`), while
+  `cargo audit` still reads the `45.0.3` copy from `Cargo.lock`.
+- 2026-07-22: Tightened the "Live, audit-only" intro to state the
+  complete removal criterion (crate absent from `Cargo.lock`, *or*
+  every locked version patched/unaffected) instead of only the
+  crate-absent half. Removed an inaccurate `.cargo/audit.toml` header
+  claim that the 20 lockfile-stale entries each have a replacement
+  "already landed or in flight" — they are simply audit-only and
+  tracked in #8519.
+- 2026-07-21: Corrected the `rand` rationale: `Cargo.lock` still
+  resolves `rand` 0.8.6, 0.9.4, and 0.10.1, so the crate was never
+  absent from the lockfile. The ignore is removed from both files
+  because `RUSTSEC-2026-0097` marks all three locked versions as
+  patched, not because `rand` disappeared. Reworded the "Resolved"
+  category and its process bullet to state the actual removal
+  criterion: crate absent from `Cargo.lock`, *or* every locked version
+  patched/unaffected per the advisory.
+- 2026-07-19: Corrected the 07-06 pass, which removed 20 entries from
+  `.cargo/audit.toml` (`unic-*`, `proc-macro-error2`, `derivative`,
+  `instant`, `bincode`, `glib`, all 10 GTK3 stack entries) that were
+  still present in `Cargo.lock` and still reported by `cargo audit`.
+  Restored those 20 as audit-only ignores; they remain removed from
+  `deny.toml`, where `cargo deny`'s resolved graph still doesn't need
+  them even after the `zeroclaw-desktop` (Tauri) reintroduction in PR
+  #8565 (`cargo deny check advisories`/`bans` verified clean). `rand`
+  (`RUSTSEC-2026-0097`) stays removed from both files: it is still
+  resolved in `Cargo.lock` (0.8.6, 0.9.4, 0.10.1), but the advisory
+  marks all three of those versions as patched, so no ignore is
+  needed.
+- 2026-07-06: Removed advisory ignores from `deny.toml` for crates no
+  longer in `cargo deny`'s resolved dependency graph: `unic-*`
+  (5 entries), `proc-macro-error2`, `derivative`, `instant`, `bincode`,
+  `glib`, all GTK3 stack entries, `rand` (all locked versions patched
+  per the advisory), and the `rustls-webpki` entries (0.102.x no longer in resolved
+  graph). Remaining deny+audit ignore: `rustls-pemfile` (1). Remaining
+  audit-only ignores: `rustls-webpki` (4 entries; in `Cargo.lock` but
+  not in resolved dep graph). Cleared the stale `advisory-not-detected`
+  warnings `cargo deny` emitted for entries whose crates left its
+  resolved graph (a warning class, not a gate failure).
+- 2026-07-01: Updated after `upstream/master` merge. Documented that
+  the GTK3 stack was resolved by PR #8544 (Tauri desktop removal),
+  `proc-macro-error` ignore was dropped, `ttf-parser` is being handled
+  by PR #8547, and the `unic-*` group remains blocked by upstream
+  `pulldown-cmark` / `mime_guess`. (PR #8543)
+- 2026-06-30: Initial doc. Created alongside PR #8542 (wasmtime
+  43 → 45.0.3 bump) and PR #8519 (the master audit-tracking issue).
