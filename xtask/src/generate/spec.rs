@@ -1795,13 +1795,15 @@ mod tests {
             exclusions["aarch64-linux-android"],
             vec!["whatsapp-web", "plugins-wasm-cranelift"]
         );
+        // personal-agent: observability-prometheus is not in the dist
+        // selection, so it is not named in the ARM32 exclusion lists.
         assert_eq!(
             exclusions["arm-unknown-linux-gnueabihf"],
-            vec!["observability-prometheus", "plugins-wasm-cranelift"]
+            vec!["plugins-wasm-cranelift"]
         );
         assert_eq!(
             exclusions["armv7-unknown-linux-gnueabihf"],
-            vec!["observability-prometheus", "plugins-wasm-cranelift"]
+            vec!["plugins-wasm-cranelift"]
         );
     }
 

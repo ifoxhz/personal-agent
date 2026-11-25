@@ -1054,16 +1054,14 @@ if [ "${PREBUILT_OK:-false}" != true ]; then
 
   # ── Preflight: 32-bit ARM ────────────────────────────────────────
 
+  # personal-agent: observability-prometheus is not in the cargo default,
+  # so 32-bit ARM is not blocked here. Enabling that feature (or a dist
+  # build that still pulls plugins-wasm-cranelift) can still fail on ARM32.
   case "$(uname -m)" in
   armv7l | armv6l | armhf)
-    die "32-bit ARM detected — the default feature 'observability-prometheus'
-requires 64-bit atomics and will not compile on this architecture.
-
-Example (full agent without prometheus):
-  $0 --minimal --features agent-runtime,schema-export
-
-See all available features:
-  $0 --list-features"
+    warn "32-bit ARM: personal-agent's default feature set does not include observability-prometheus."
+    warn "Do not enable observability-prometheus on this architecture (it needs 64-bit atomics)."
+    warn "The standard dist selection also excludes plugins-wasm-cranelift on ARM32."
     ;;
   esac
 

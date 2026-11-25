@@ -47,11 +47,13 @@ fn root_schema_export_feature_graph_is_gated() {
         .get("default")
         .and_then(toml::Value::as_array)
         .expect("root features.default must be an array");
+    // personal-agent: schema export stays wired as an opt-in feature and is
+    // not part of the trimmed default build.
     assert!(
-        default_features
+        !default_features
             .iter()
             .any(|value| value.as_str() == Some("schema-export")),
-        "root features.default must include schema-export; got {default_features:?}"
+        "personal-agent features.default must not include schema-export; got {default_features:?}"
     );
 
     let workspace = root

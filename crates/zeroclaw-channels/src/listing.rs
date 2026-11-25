@@ -300,14 +300,24 @@ mod tests {
         assert!(super::qr_pairing_channel("").is_none());
     }
 
+    // personal-agent: `default-channels` is email, webhook, filesystem, and
+    // the ACP server. Telegram and Discord compile only when their own
+    // features are enabled.
     #[cfg(feature = "default-channels")]
     #[test]
     fn channel_type_compilation_tracks_enabled_features() {
-        assert!(is_channel_type_compiled("telegram"));
         assert!(is_channel_type_compiled("email"));
         assert!(is_channel_type_compiled("webhook"));
         assert!(is_channel_type_compiled("acp-server"));
-        assert!(is_channel_type_compiled("discord"));
+        assert!(is_channel_type_compiled("filesystem"));
+        assert_eq!(
+            is_channel_type_compiled("telegram"),
+            cfg!(feature = "channel-telegram")
+        );
+        assert_eq!(
+            is_channel_type_compiled("discord"),
+            cfg!(feature = "channel-discord")
+        );
         assert_eq!(
             is_channel_type_compiled("nextcloud-talk"),
             cfg!(feature = "channel-nextcloud")

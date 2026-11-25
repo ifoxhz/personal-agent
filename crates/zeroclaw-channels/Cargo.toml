@@ -175,15 +175,15 @@ jsonwebtoken = { version = "10", optional = true, default-features = false, feat
 ] }
 thiserror = { version = "2.0", optional = true }
 
+# personal-agent modification notice: default-channels matches the root
+# package. Derived from ZeroClaw; not affiliated with ZeroClaw Labs.
 [features]
 default = ["default-channels"]
 test-util = []
 default-channels = [
   "channel-acp-server",
-  "channel-discord",
   "channel-email",
   "channel-filesystem",
-  "channel-telegram",
   "channel-webhook",
 ]
 channels-full = [
@@ -192,6 +192,7 @@ channels-full = [
   "channel-dingtalk",
   "channel-discord",
   "channel-git",
+  "channel-telegram",
   "channel-imessage",
   "channel-irc",
   "channel-lark",

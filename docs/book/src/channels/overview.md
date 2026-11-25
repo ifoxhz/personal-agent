@@ -6,7 +6,9 @@ An agent lists the channels it answers on; see [Agents](../agents/overview.md) f
 
 Channels are implementations of the `Channel` trait in `zeroclaw-api`. Each one is feature-gated at compile time, so a minimal build only includes the channels you want.
 
-The default ZeroClaw build includes a lean channel bundle: ACP, webhook, email, Telegram, Discord, and filesystem. These cover local/editor sessions, gateway ingress, and common first-run external messaging without compiling every bundled platform integration. Standard distribution artifacts add Git, Matrix, Lark, and WhatsApp Web; the Android artifact omits WhatsApp Web for target compatibility. For source installs that need the historical broad channel set, run `install.sh --source --preset full`, build with `--features channels-full`, or use individual `channel-*` features for selective builds:
+This repository is [personal-agent](https://github.com/ifoxhz/personal-agent), a derivative of ZeroClaw. It is not affiliated with ZeroClaw Labs. The personal-agent default build includes a narrow channel bundle: ACP (`channel-acp-server` and `acp-bridge`), webhook, email, and filesystem, plus the HTTP gateway those editor and webhook paths use. Telegram, Discord, Slack, Matrix, WhatsApp, and the other chat channels remain in the source tree and are off unless you opt in. Upstream ZeroClaw's own default bundle is wider; see <https://github.com/zeroclaw-labs/zeroclaw>.
+
+Standard distribution artifacts (`dist`) add the registry extras on top of that narrower default (Git, Matrix, Lark, WhatsApp Web, WASM plugins, and the compat tool adapters). The Android artifact omits WhatsApp Web and the WASM compiler for target compatibility. For the historical broad channel set, build with `--features channels-full`, or use individual `channel-*` features:
 
 <div class="os-tabs-src">
 

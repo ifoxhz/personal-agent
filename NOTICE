@@ -56,3 +56,23 @@ the Verifiable Intent open specification and reference implementation:
 This implementation follows the VI specification design (SD-JWT layered
 credentials, constraint model, three-layer chain). No source code was copied
 from the reference implementation.
+
+personal-agent derivative
+=========================
+
+https://github.com/ifoxhz/personal-agent is an independent derivative of
+ZeroClaw. It is not the official ZeroClaw repository, it is not published by
+ZeroClaw Labs, and it is not affiliated with, endorsed by, or maintained by
+ZeroClaw Labs.
+
+The product name is personal-agent. It does not use the ZeroClaw name as its
+brand and it does not use the ZeroClaw logo as its brand. Crate names, the
+`zeroclaw` binary name, copyright lines, and this NOTICE are kept so upstream
+attribution stays intact.
+
+Modifications in this derivative include the default Cargo feature set
+(see the root Cargo.toml) and the personal-agent docs and workspace template
+(ARCHITECTURE.md, README.md, templates/personal-agent-workspace/). Those
+modified files carry a personal-agent notice. Upstream license terms still
+apply: MIT OR Apache-2.0, including the Apache-2.0 requirement to state that
+changed files were changed.

@@ -94,7 +94,7 @@ cargo build --release --locked --no-default-features --features agent-runtime
 
 </div>
 
-This leaves out the other default features: `default-channels`, `gateway`, `acp-bridge`, `observability-prometheus`, and `schema-export`. Add back what you use by extending the list, for example `--features "agent-runtime,gateway,channel-telegram"`. [Channels overview](../channels/overview.md) lists the per-channel flags.
+On personal-agent this leaves out the other default features: `default-channels` (email, webhook, filesystem, ACP server), `gateway`, and `acp-bridge`. Prometheus metrics and schema export are not in the default set; add `observability-prometheus` or `schema-export` when you want them. Add a chat channel the same way, for example `--features "agent-runtime,gateway,channel-telegram"`. [Channels overview](../channels/overview.md) lists the per-channel flags.
 
 Or check what's happening:
 

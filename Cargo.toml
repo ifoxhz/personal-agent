@@ -1,3 +1,8 @@
+# personal-agent modification notice: this manifest is derived from
+# ZeroClaw (https://github.com/zeroclaw-labs/zeroclaw), dual-licensed
+# MIT OR Apache-2.0. The default feature set below is narrowed for
+# personal-agent. Crate names, copyright, and trademark notices stay.
+# Not affiliated with ZeroClaw Labs. See NOTICE and ARCHITECTURE.md.
 [workspace]
 members = [".", "crates/zeroclaw-api", "crates/zeroclaw-buildinfo", "crates/zeroclaw-rpc-proto", "crates/zeroclaw-rpc-client", "crates/zeroclaw-infra", "crates/zeroclaw-config", "crates/zeroclaw-dist", "crates/zeroclaw-log", "crates/zeroclaw-log/tests/fixtures/attribution-macro-support", "crates/zeroclaw-log/tests/fixtures/attribution-macro-consumer", "crates/zeroclaw-tls", "crates/zeroclaw-relay-proto", "apps/zerorelay", "crates/zeroclaw-spawn", "crates/zeroclaw-commands", "crates/zeroclaw-providers", "crates/zeroclaw-memory", "crates/zeroclaw-channels", "crates/zeroclaw-tools", "crates/zeroclaw-sop-graph", "crates/zeroclaw-runtime", "crates/zeroclaw-eval", "apps/zerocode", "crates/zeroclaw-plugins", "crates/zeroclaw-plugins/tests/fixtures/channel-fixture", "crates/zeroclaw-plugins/tests/fixtures/channel-egress-fixture", "crates/zeroclaw-plugins/tests/fixtures/channel-websocket-fixture", "crates/zeroclaw-plugins/tests/fixtures/egress-fixture", "crates/zeroclaw-plugins/tests/fixtures/memory-fixture", "crates/zeroclaw-plugins/tests/fixtures/tool-fixture", "crates/zeroclaw-plugins/tests/fixtures/tool-timeout-fixture", "crates/zeroclaw-plugins/tests/fixtures/tool-sequential-fixture", "crates/zeroclaw-plugins/tests/fixtures/tool-secret-fixture", "crates/zeroclaw-plugins/tests/fixtures/tool-socket-fixture", "crates/zeroclaw-plugins/tests/fixtures/tool-websocket-fixture", "crates/zeroclaw-gateway", "crates/zeroclaw-hardware", "crates/zeroclaw-tool-call-parser", "crates/zeroclaw-macros", "apps/tauri", "tools/fill-translations", "xtask", "tests/fixtures/runtime-composition-consumer"]
 exclude = ["vendor/crossterm-0.29.0"]
@@ -283,17 +288,26 @@ cli_excluded_features = [
 # its own.
 [package.metadata.zeroclaw.dist_target_exclusions]
 aarch64-linux-android = ["whatsapp-web", "plugins-wasm-cranelift"]
-arm-unknown-linux-gnueabihf = ["observability-prometheus", "plugins-wasm-cranelift"]
-armv7-unknown-linux-gnueabihf = ["observability-prometheus", "plugins-wasm-cranelift"]
+# personal-agent: observability-prometheus is no longer in the cargo
+# default or the dist selection, so it is not an ARM32 dist exclusion.
+arm-unknown-linux-gnueabihf = ["plugins-wasm-cranelift"]
+armv7-unknown-linux-gnueabihf = ["plugins-wasm-cranelift"]
 
 [features]
+# personal-agent default. A plain `cargo build --release` keeps the agent
+# runtime (memory, cron, tool loop), the editor/ACP path, and four channels:
+# email, webhook, filesystem, and channel-acp-server. The HTTP gateway stays
+# because `zeroclaw-acp-bridge` dials the gateway's `/acp` WebSocket.
+# Chat/social channels, hardware, coding-CLI tools, SaaS tools, Postgres
+# memory, Prometheus, WASM plugins, sandboxes, browser-native, and WebAuthn
+# stay in the tree and are off unless named with `--features`.
+# `schema-export` is opt-in here. The gateway crate still has its own
+# schema-export and a2a defaults when the gateway dependency is built.
 default = [
     "agent-runtime",
     "default-channels",
     "acp-bridge",
     "gateway",
-    "observability-prometheus",
-    "schema-export",
 ]
 
 # The core agent runtime — agent loop, tools, persistence subsystems.
@@ -311,18 +325,22 @@ agent-runtime = [
     "dep:ring",
 ]
 
-# Lean channel bundle included in `default`. These channels cover local/editor
-# ACP, gateway/webhook ingress, and common first-run external chat/email paths.
+# personal-agent lean channel bundle included in `default`.
+# Email, webhook, filesystem, and the editor ACP server. Telegram, Discord,
+# and the other chat channels are not in this bundle.
 default-channels = [
     "channel-acp-server", "channel-webhook",
-    "channel-email", "channel-telegram", "channel-discord",
-    "channel-filesystem",
+    "channel-email", "channel-filesystem",
 ]
 
-# Historical broad channel bundle. Preserves the older default channel surface.
+# Historical broad channel bundle. Preserves the older ZeroClaw channel
+# surface, including the chat channels personal-agent leaves out of `default`.
+# Telegram and Discord are listed explicitly so dropping them from
+# `default-channels` does not remove them from `channels-full`.
 channels-full = [
     "default-channels", "zeroclaw-channels/channels-full", "channel-lark",
     "channel-line",
+    "channel-telegram", "channel-discord",
     "channel-slack", "channel-signal",
     "channel-mattermost", "channel-irc", "channel-imessage",
     "channel-dingtalk", "channel-qq", "channel-bluesky", "channel-git",
